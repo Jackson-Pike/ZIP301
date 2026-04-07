@@ -1,46 +1,89 @@
 //
 // Created by Jackson Pike on 4/2/26.
 //
+// Optimized using a Huffman trie for O(1)-per-bit decoding.
+//
+// References:
+//   - Cormen, T.H., Leiserson, C.E., Rivest, R.L., and Stein, C. (2009).
+//     Introduction to Algorithms, 3rd ed. MIT Press. Ch. 16.3, "Huffman codes."
+//     (Huffman prefix-code trie structure and properties)
+//   - cppreference.com: std::basic_istream::get
+//     https://en.cppreference.com/w/cpp/io/basic_istream/get
+//     (byte-at-a-time binary reads)
+//   - cppreference.com: std::basic_ostream::write
+//     https://en.cppreference.com/w/cpp/io/basic_ostream/write
+//     (bulk buffered output)
+//   - cppreference.com: std::ios::binary
+//     https://en.cppreference.com/w/cpp/io/ios_base/openmode
+//     (binary mode to prevent platform newline translation)
 
 #include "Decompress.h"
 #include <string>
 #include <iostream>
 #include <fstream>
-#include <map>
 
 using namespace std;
+
+// ---------------------------------------------------------------------------
+// Huffman trie
+// ---------------------------------------------------------------------------
+
+struct TrieNode {
+    TrieNode* children[2];  // children[0] = bit 0, children[1] = bit 1
+    char decodedChar;       // '\0' means internal node (not a leaf)
+
+    TrieNode() : decodedChar('\0') {
+        children[0] = children[1] = nullptr;
+    }
+};
+
+void deleteTrie(TrieNode* node) {
+    if (!node) return;
+    deleteTrie(node->children[0]);
+    deleteTrie(node->children[1]);
+    delete node;
+}
+
+// ---------------------------------------------------------------------------
+// Globals
+// ---------------------------------------------------------------------------
+
 fstream ifs;
-map<string, string> huffmanMap;
-int bitCount;
-int longestLen = 0;
 fstream ofs;
+TrieNode* trieRoot = nullptr;
+int bitCount;
+
+// ---------------------------------------------------------------------------
+// openFile
+// ---------------------------------------------------------------------------
 
 void openFile(int argc, char** argv) {
-    /* =====================FILE OPENING========================== */
-
     if (argc < 2) {
         cout << "Ooops! You forgot to provide a filename on the command line." << endl;
         exit(1);
     }
 
-    // Proceed to open ifs with commandline argument [1] (the filename)
     ifs.open(argv[1], ios::in | ios::binary);
-
 
     string filename = argv[1];
     size_t period = filename.find('.');
     string outputFile = filename.substr(0, period);
     outputFile += "2.txt";
-    ofs.open(outputFile, ios::out);
+    ofs.open(outputFile, ios::out | ios::binary);
 
-    // If there was an issue or the file did not exist, print error and exit.
     if (!ifs) {
         cout << "ERROR occurred when reading file: " << argv[1] << endl;
         exit(1);
     }
 }
 
+// ---------------------------------------------------------------------------
+// readHeader — parse Huffman codes and build the trie
+// ---------------------------------------------------------------------------
+
 void readHeader() {
+    trieRoot = new TrieNode();
+
     while (true) {
         string line;
         getline(ifs, line);
@@ -49,60 +92,76 @@ void readHeader() {
             break;
         }
 
-        // Parse the line: split on space
+        // Split on first space: "<bits> <mapping>"
         size_t space = line.find(' ');
         string encoding = line.substr(0, space);
-        if (encoding.size() > longestLen) {
-            longestLen = encoding.size();
+        string mapping  = line.substr(space + 1);
+
+        // Resolve surrogate encodings to their actual characters once at build time
+        char decoded;
+        if      (mapping == "space")   decoded = ' ';
+        else if (mapping == "newline") decoded = '\n';
+        else if (mapping == "return")  decoded = '\r';
+        else if (mapping == "tab")     decoded = '\t';
+        else                           decoded = mapping[0];
+
+        // Insert into trie
+        TrieNode* node = trieRoot;
+        for (char bit : encoding) {
+            int idx = bit - '0';  // '0' -> 0, '1' -> 1
+            if (!node->children[idx]) {
+                node->children[idx] = new TrieNode();
+            }
+            node = node->children[idx];
         }
-        string mapping = line.substr(space + 1);
-        huffmanMap[encoding] = mapping;
+        node->decodedChar = decoded;
     }
-
-    for (auto huffman_map : huffmanMap) {
-        cout << huffman_map.first << " -> " << huffman_map.second << endl;
-    }
-
-
 }
 
-void readBinaryAndWriteOutput() {
+// ---------------------------------------------------------------------------
+// readBinaryAndWriteOutput — stream decode via trie, buffered output
+// ---------------------------------------------------------------------------
 
-    string bitString = "";
+void readBinaryAndWriteOutput() {
+    const size_t FLUSH_SIZE = 65536;
+    string outBuf;
+    outBuf.reserve(FLUSH_SIZE + 4);
+
+    TrieNode* node = trieRoot;
+    int bitsRead = 0;
     char byte;
+
     while (ifs.get(byte)) {
-        // Convert byte to 8 bits
         for (int i = 7; i >= 0; i--) {
-            bitString += ((byte >> i) & 1) ? '1' : '0';
+            if (bitsRead == bitCount) goto done;
+
+            node = node->children[(byte >> i) & 1];
+            bitsRead++;
+
+            if (node->decodedChar != '\0') {
+                outBuf += node->decodedChar;
+                if (outBuf.size() >= FLUSH_SIZE) {
+                    ofs.write(outBuf.data(), outBuf.size());
+                    outBuf.clear();
+                }
+                node = trieRoot;
+            }
         }
     }
 
-    // Now trim to the exact bit count
-    bitString = bitString.substr(0, bitCount);
-
-    string bitBuffer = "";
-    for (char bit : bitString) {
-        bitBuffer += bit;
-
-        if (huffmanMap.find(bitBuffer) != huffmanMap.end()) {
-            string decodedChar = huffmanMap[bitBuffer];
-            if (decodedChar == "space") {
-                ofs << ' ';
-            } else if (decodedChar == "newline") {
-                ofs << endl;
-            } else {
-                ofs << decodedChar;
-            }
-
-            bitBuffer = "";
-        }
+done:
+    if (!outBuf.empty()) {
+        ofs.write(outBuf.data(), outBuf.size());
     }
     ifs.close();
     ofs.close();
 }
 
-int main(int argc, char** argv) {
+// ---------------------------------------------------------------------------
+// main
+// ---------------------------------------------------------------------------
 
+int main(int argc, char** argv) {
     openFile(argc, argv);
     readHeader();
 
@@ -112,4 +171,6 @@ int main(int argc, char** argv) {
 
     readBinaryAndWriteOutput();
 
+    deleteTrie(trieRoot);
+    return 0;
 }
