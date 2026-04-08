@@ -5,8 +5,11 @@ set(CMAKE_CXX_STANDARD 14)
 
 include_directories(.)
 
-add_executable(ZIP301
-        Decompress.cpp
-        Decompress.h
-        Compress.cpp
-        Compress.h)
+add_executable(Decompress
+        decompression/Decompress.cpp
+        decompression/Decompress.h)
+
+add_executable(Compress
+        compression/Compress.cpp
+        compression/Compress.h
+        compression/KanaanCompress.cpp)
