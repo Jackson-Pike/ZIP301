@@ -10,4 +10,10 @@ add_executable(Decompress
 )
 
 add_executable(Compress
-        compression/Compress.cpp)
+        compression/Compress.cpp
+)
+
+if (WIN32)
+    target_link_options(Decompress PRIVATE -static -static-libgcc -static-libstdc++)
+    target_link_options(Compress PRIVATE -static -static-libgcc -static-libstdc++)
+endif()
