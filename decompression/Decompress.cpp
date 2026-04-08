@@ -171,6 +171,6 @@ int main(int argc, char** argv) {
 
     readBinaryAndWriteOutput();
 
-    deleteTrie(trieRoot);
+    //deleteTrie(trieRoot);
     return 0;
 }

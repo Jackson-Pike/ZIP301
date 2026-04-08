@@ -80,13 +80,17 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 
+	// Read entire input into memory in one syscall
+	ifs.seekg(0, ios::end);
+	size_t fileSize = static_cast<size_t>(ifs.tellg());
+	ifs.seekg(0, ios::beg);
+	vector<unsigned char> inputBuf(fileSize);
+	ifs.read(reinterpret_cast<char*>(inputBuf.data()), fileSize);
+	ifs.close();
+
     // Count frequencies of each byte value in the input file
 	vector<uint64_t> freq(256, 0);
-	char c;
-	while (ifs.get(c)) {
-		unsigned char uc = static_cast<unsigned char>(c);
-		freq[uc]++;
-	}
+	for (unsigned char uc : inputBuf) freq[uc]++;
 
     // Build a min-heap (priority queue) of leaf nodes for each byte that appears
 	priority_queue<Node*, vector<Node*>, Cmp> pq;
@@ -116,28 +120,22 @@ int main(int argc, char** argv) {
 	unordered_map<unsigned char, string> codes;
 	if (root) buildCodes(root, string(), codes);
 
-	// Re-open input to encode (seek back to beginning)
-	ifs.clear();
-	ifs.seekg(0, ios::beg);
+	// Pre-pack codes into direct-indexed arrays for O(1) lookup during encoding
+	uint32_t codeWord[256] = {};  // bits of each code, MSB-aligned in the uint32_t
+	int      codeLen[256]  = {};  // number of valid bits
 
-	string bitstr;
-	// Reserve some space if possible
-	{
-		uint64_t totalBytes = 0;
-		for (int i = 0; i < 256; ++i) totalBytes += freq[i];
-		bitstr.reserve(static_cast<size_t>(min<uint64_t>(totalBytes * 2, 1ULL << 26)));
+	uint64_t totalBits = 0;
+	for (int i = 0; i < 256; ++i) {
+		if (freq[i] == 0) continue;
+		const string& s = codes[static_cast<unsigned char>(i)];
+		int len = static_cast<int>(s.size());
+		codeLen[i] = len;
+		uint32_t word = 0;
+		for (int k = 0; k < len; ++k)
+			if (s[k] == '1') word |= (1u << (31 - k));
+		codeWord[i] = word;
+		totalBits += freq[i] * static_cast<uint64_t>(len);
 	}
-
-    // Convert the input file bytes to a long string of '0'/'1' using the codes
-	if (root) {
-		while (ifs.get(c)) {
-			unsigned char uc = static_cast<unsigned char>(c);
-			auto it = codes.find(uc);
-			if (it != codes.end()) bitstr += it->second; // append the prefix code
-		}
-	}
-
-	uint64_t totalBits = bitstr.size();
 
 	// Build output filename: replace last extension with .zip301
 	string outpath;
@@ -167,21 +165,37 @@ int main(int argc, char** argv) {
 	// Write total number of bits before the binary data
 	ofs << totalBits << '\n';
 
-	// Pack the bitstring into raw bytes (MSB first), padding the last byte with trailing zeros
-	size_t numBytes = (totalBits + 7) / 8;
-	for (size_t i = 0; i < numBytes; ++i) {
-		unsigned char byte = 0;
-		for (int b = 7; b >= 0; --b) {
-			size_t bitIdx = i * 8 + (7 - b);
-			if (bitIdx < totalBits && bitstr[bitIdx] == '1') {
-				byte |= (1u << b);
+	// Stream-encode inputBuf directly into packed bytes via a 64-bit accumulator
+	const size_t OUT_FLUSH = 65536;
+	vector<unsigned char> outBuf;
+	outBuf.reserve(OUT_FLUSH + 8);
+
+	uint64_t accumulator = 0;  // valid bits sit at the MSB side
+	int      bitsInAcc   = 0;
+
+	for (unsigned char uc : inputBuf) {
+		accumulator |= (static_cast<uint64_t>(codeWord[uc]) << (32 - bitsInAcc));
+		bitsInAcc   += codeLen[uc];
+
+		while (bitsInAcc >= 8) {
+			outBuf.push_back(static_cast<unsigned char>(accumulator >> 56));
+			accumulator <<= 8;
+			bitsInAcc   -= 8;
+			if (outBuf.size() >= OUT_FLUSH) {
+				ofs.write(reinterpret_cast<const char*>(outBuf.data()), outBuf.size());
+				outBuf.clear();
 			}
 		}
-		ofs.put(static_cast<char>(byte));
 	}
 
+	// Flush partial last byte (zero-padded in low bits)
+	if (bitsInAcc > 0)
+		outBuf.push_back(static_cast<unsigned char>(accumulator >> 56));
+	if (!outBuf.empty())
+		ofs.write(reinterpret_cast<const char*>(outBuf.data()), outBuf.size());
+
 	ofs.close();
-	freeTree(root);
+	//freeTree(root);
 
 	cout << "Wrote encoded output to: " << outpath << endl;
 	return 0;

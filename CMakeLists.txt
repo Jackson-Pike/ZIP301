@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.5)
 project(ZIP301)
 
 set(CMAKE_CXX_STANDARD 14)
@@ -10,6 +10,4 @@ add_executable(Decompress
         decompression/Decompress.h)
 
 add_executable(Compress
-        compression/Compress.cpp
-        compression/Compress.h
         compression/KanaanCompress.cpp)
