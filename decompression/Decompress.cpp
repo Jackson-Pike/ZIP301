@@ -17,10 +17,12 @@
 //     https://en.cppreference.com/w/cpp/io/ios_base/openmode
 //     (binary mode to prevent platform newline translation)
 
-#include "Decompress.h"
 #include <string>
 #include <iostream>
 #include <fstream>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 using namespace std;
 
@@ -65,10 +67,14 @@ void openFile(int argc, char** argv) {
 
     ifs.open(argv[1], ios::in | ios::binary);
 
+    // Build output filename: decompressed/<stem>.txt
+    fs::create_directories("decompressed");
     string filename = argv[1];
-    size_t period = filename.find('.');
-    string outputFile = filename.substr(0, period);
-    outputFile += "2.txt";
+    size_t slash = filename.find_last_of("/\\");
+    string basename = (slash == string::npos) ? filename : filename.substr(slash + 1);
+    size_t dot = basename.find_last_of('.');
+    string stem = (dot == string::npos) ? basename : basename.substr(0, dot);
+    string outputFile = "decompressed/" + stem + ".txt";
     ofs.open(outputFile, ios::out | ios::binary);
 
     if (!ifs) {
