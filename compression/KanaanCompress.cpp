@@ -50,24 +50,16 @@ void freeTree(Node* node) {
 	delete node;
 }
 
-// Helper: return a readable description for a byte value
-// Examples:
-//   10 -> "'\\n'"  (newline)
-//   32 -> "' '"     (space)
-//   65 -> "'A'"     (printable ASCII)
-//   27 -> "0x1B"    (non-printable shown as hex)
-static string describeByte(int v) {
+// Helper: return the character label used in the .zip301 header
+// Special characters use keyword names; printable non-space chars are bare.
+static string charLabel(int v) {
 	unsigned char uc = static_cast<unsigned char>(v);
-	if (uc == '\n') return string("'\\n'");
-	if (uc == '\r') return string("'\\r'");
-	if (uc == '\t') return string("'\\t'");
-	if (uc == ' ') return string("' '");
+	if (uc == '\n') return string("newline");
+	if (uc == '\r') return string("return");
+	if (uc == '\t') return string("tab");
+	if (uc == ' ') return string("space");
 	if (isprint(uc)) {
-		string s;
-		s.push_back('\'' );
-		s.push_back(static_cast<char>(uc));
-		s.push_back('\'' );
-		return s;
+		return string(1, static_cast<char>(uc));
 	}
 	std::ostringstream oss;
 	oss << "0x" << std::hex << std::uppercase << std::setw(2) << std::setfill('0') << (int)uc;
@@ -166,18 +158,27 @@ int main(int argc, char** argv) {
 	for (auto &p : codes) codeLines.emplace_back(static_cast<int>(p.first), p.second);
 	sort(codeLines.begin(), codeLines.end(), [](auto &a, auto &b){ return a.first < b.first; });
     for (auto &pr : codeLines) {
-		// write: numeric value, printable/escaped representation, then the prefix code
-		ofs << pr.first << ' ' << describeByte(pr.first) << ' ' << pr.second << '\n';
+		ofs << pr.second << ' ' << charLabel(pr.first) << '\n';
 	}
 
 	// Separator line of five asterisks
 	ofs << "*****\n";
 
-	// Write binary string as text 0/1 for debugging/verification
-	ofs << bitstr << '\n';
-
-	// Write total number of bits
+	// Write total number of bits before the binary data
 	ofs << totalBits << '\n';
+
+	// Pack the bitstring into raw bytes (MSB first), padding the last byte with trailing zeros
+	size_t numBytes = (totalBits + 7) / 8;
+	for (size_t i = 0; i < numBytes; ++i) {
+		unsigned char byte = 0;
+		for (int b = 7; b >= 0; --b) {
+			size_t bitIdx = i * 8 + (7 - b);
+			if (bitIdx < totalBits && bitstr[bitIdx] == '1') {
+				byte |= (1u << b);
+			}
+		}
+		ofs.put(static_cast<char>(byte));
+	}
 
 	ofs.close();
 	freeTree(root);
